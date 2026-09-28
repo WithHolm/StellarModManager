@@ -9,7 +9,7 @@ Getting Started:
 4. Once setup is complete, you can browse, install, and manage your mods using the "Online" and "Installed" tabs.
 
 Community Support:
-- Please report issues or suggest features directly on my GitHub: https://github.com/Krunk-theduck/StellarModManager
+- Please report issues or suggest features directly on my GitHub: https://github.com/jollyname/StellarModManager
 
 License:
 This software is provided under the MIT License. A copy of the license is included in the installation folder.
