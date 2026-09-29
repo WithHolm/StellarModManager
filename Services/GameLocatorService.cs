@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Drawing.Imaging;
+using System.Text.RegularExpressions;
 using AvaloniaBitmap = Avalonia.Media.Imaging.Bitmap;
 
 namespace StellarModManager.Services;
@@ -12,36 +13,64 @@ namespace StellarModManager.Services;
 public enum GameInstallSource { Steam }
 public record GameInstallationInfo(DirectoryInfo Directory, AvaloniaBitmap? Icon, GameInstallSource Source);
 
-public static class GameLocatorService
+public static partial class GameLocatorService
 {
     public const string ExecutableName = "StellarDrive.exe";
+    public const string GamesDirectory = "steamapps/common/";
+    public const string LibraryVdfPath = "Steam/steamapps/libraryfolders.vdf";
+
+    // trying both because I think Steam switched to 64 bit? My install is in the 32 directory tho... 
+    public static readonly string[] ProgramFilesPaths =
+    [
+        Environment.ExpandEnvironmentVariables("%ProgramW6432%"),     // 64 bit
+        Environment.ExpandEnvironmentVariables("%ProgramFiles(x86)%") // 32 bit
+    ];
+
+    [GeneratedRegex("""(?:"path")(?:\s*)(?:")(?<path>.*)(?:")""")]
+    private static partial Regex PathExtractionRegex();
 
 
-    public static IEnumerable<GameInstallationInfo> Locate()
+    public static IReadOnlyList<GameInstallationInfo> Locate()
     {
         if (!OperatingSystem.IsWindows()) return [];
 
-        string programs64bit = Environment.ExpandEnvironmentVariables("%ProgramW6432%");
-        string programs32bit = Environment.ExpandEnvironmentVariables("%ProgramFiles(x86)%");
+        try
+        {
+            var installs = GetSteamLibraryDirectories()
+                .SelectMany(d => d.GetDirectories())
+                .Where(d => d.Name.Contains("StellarDrive"))
+                .Select(d => CollectInstallInfo(d, GameInstallSource.Steam))
+                .OfType<GameInstallationInfo>();
 
-        string? steamCommon = GetSteamCommon(programs64bit) ?? GetSteamCommon(programs32bit);
-        if (steamCommon is null) return [];
-
-        var directory = new DirectoryInfo(steamCommon);
-        var installs = directory.GetDirectories()
-            .Where(d => d.Name.Contains("StellarDrive"))
-            .Select(d => CollectInstallInfo(d, GameInstallSource.Steam))
-            .OfType<GameInstallationInfo>();
-
-        return installs;
+            return [.. installs];
+        }
+        catch
+        {
+            return [];
+        }
     }
 
 
-    private static string? GetSteamCommon(string programsPath)
+    private static IEnumerable<DirectoryInfo> GetSteamLibraryDirectories()
     {
-        var fullPath = Path.Combine(programsPath, "Steam/steamapps/common");
+        string? fileContent = null;
+        foreach (var ProgramFilesPath in ProgramFilesPaths)
+        {
+            var filePath = Path.Combine(ProgramFilesPath, LibraryVdfPath);
 
-        return Path.Exists(fullPath) ? fullPath : null;
+            if (Path.Exists(filePath))
+            {
+                fileContent = File.ReadAllText(filePath);
+                break;
+            }
+        }
+        if (fileContent is null) return [];
+
+        var gamePaths = PathExtractionRegex()
+            .Matches(fileContent)
+            .Select(m => new DirectoryInfo(Path.Combine(m.Groups["path"].Value, GamesDirectory)));
+
+        return gamePaths;
     }
 
     private static GameInstallationInfo? CollectInstallInfo(DirectoryInfo directory, GameInstallSource source)
@@ -54,7 +83,7 @@ public static class GameLocatorService
         {
             using var fileIcon = Icon.ExtractAssociatedIcon(executablePath);
             using var systemBitmap = fileIcon?.ToBitmap();
-            
+
             // https://github.com/AvaloniaUI/Avalonia/discussions/5908
             var data = systemBitmap?.LockBits(new Rectangle(0, 0, systemBitmap.Width, systemBitmap.Height), ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
             if (data is not null)
@@ -66,7 +95,7 @@ public static class GameLocatorService
                     data: data.Scan0,
                     size: new Avalonia.PixelSize(data.Width, data.Height),
                     dpi: new Avalonia.Vector(96, 96),
-                    stride: data.Stride 
+                    stride: data.Stride
                 );
                 systemBitmap?.UnlockBits(data);
             }

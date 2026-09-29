@@ -12,7 +12,7 @@ namespace StellarModManager.ViewModels;
 
 public partial class MainWindowViewModel
 {
-    public IReadOnlyList<GameInstallationInfo> DetectedGameInstalls { get; } = [.. GameLocatorService.Locate()];
+    public IReadOnlyList<GameInstallationInfo> DetectedGameInstalls { get; } = GameLocatorService.Locate();
 
     [ObservableProperty]
     private bool setupRequired = true;
