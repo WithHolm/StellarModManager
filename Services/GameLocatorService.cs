@@ -6,6 +6,9 @@ using System.Linq;
 using System.Drawing.Imaging;
 using System.Text.RegularExpressions;
 using AvaloniaBitmap = Avalonia.Media.Imaging.Bitmap;
+using Microsoft.Win32;
+using System.Diagnostics;
+using System.Runtime.Versioning;
 
 namespace StellarModManager.Services;
 
@@ -17,8 +20,9 @@ public static partial class GameLocatorService
 {
     public const string ExecutableName = "StellarDrive.exe";
     public const string GamesDirectory = "steamapps/common/";
-    public const string LibraryVdfPath = "Steam/steamapps/libraryfolders.vdf";
+    public const string LibraryVdfPath = "steamapps/libraryfolders.vdf";
 
+    // todo: do we really neeed to have this? registry has this, but not removing it for now, just in case
     // trying both because I think Steam switched to 64 bit? My install is in the 32 directory tho... 
     public static readonly string[] ProgramFilesPaths =
     [
@@ -26,9 +30,16 @@ public static partial class GameLocatorService
         Environment.ExpandEnvironmentVariables("%ProgramFiles(x86)%") // 32 bit
     ];
 
+    //using registry reference is safer than assuming program files. 
+    [SupportedOSPlatform("windows")]
+    public static readonly (RegistryKey root, string subKey, string valueName)[] RegistryPaths =
+    [
+        (Registry.CurrentUser, @"SOFTWARE\Valve\Steam", "SteamPath"),
+        (Registry.LocalMachine, @"SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath")
+    ];
+
     [GeneratedRegex("""(?:"path")(?:\s*)(?:")(?<path>.*)(?:")""")]
     private static partial Regex PathExtractionRegex();
-
 
     public static IReadOnlyList<GameInstallationInfo> Locate()
     {
@@ -37,6 +48,7 @@ public static partial class GameLocatorService
         try
         {
             var installs = GetSteamLibraryDirectories()
+                .Where(d => d.Exists)
                 .SelectMany(d => d.GetDirectories())
                 .Where(d => d.Name.Contains("StellarDrive"))
                 .Select(d => CollectInstallInfo(d, GameInstallSource.Steam))
@@ -50,13 +62,36 @@ public static partial class GameLocatorService
         }
     }
 
+    private static IEnumerable<DirectoryInfo> GetSteamPathFromRegistry()
+    {
+        if (!OperatingSystem.IsWindows()) return [];
+
+        var ret = new List<DirectoryInfo>();
+        foreach (var (root, subKey, valueName) in RegistryPaths)
+        {
+            var steamPath = root.OpenSubKey(subKey)?.GetValue(valueName) as string;
+            if (steamPath is not null)
+            {
+                ret.Add(new DirectoryInfo(steamPath));
+            }
+        }
+        return ret;
+    }
+
 
     private static IEnumerable<DirectoryInfo> GetSteamLibraryDirectories()
     {
+        var PotentialSteamPaths = GetSteamPathFromRegistry().ToList();
+        PotentialSteamPaths.AddRange(ProgramFilesPaths.Select(
+            p => new DirectoryInfo(Path.Combine(p, "steam"))
+        ));
+
         string? fileContent = null;
-        foreach (var ProgramFilesPath in ProgramFilesPaths)
+        foreach (var PotentialSteam in PotentialSteamPaths)
         {
-            var filePath = Path.Combine(ProgramFilesPath, LibraryVdfPath);
+            if (!PotentialSteam.Exists) continue;
+
+            var filePath = Path.Combine(PotentialSteam.FullName, LibraryVdfPath);
 
             if (Path.Exists(filePath))
             {
@@ -68,7 +103,8 @@ public static partial class GameLocatorService
 
         var gamePaths = PathExtractionRegex()
             .Matches(fileContent)
-            .Select(m => new DirectoryInfo(Path.Combine(m.Groups["path"].Value, GamesDirectory)));
+            .Select(m => new DirectoryInfo(Path.Combine(m.Groups["path"].Value.Replace(@"\\", @"\"), GamesDirectory)))
+            .DistinctBy(d => d.FullName);
 
         return gamePaths;
     }
